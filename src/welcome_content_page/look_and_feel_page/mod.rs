@@ -1,14 +1,9 @@
 // GTK crates
 use adw::prelude::*;
 use adw::*;
-use duct::cmd;
 use glib::*;
 use serde::Deserialize;
-use std::cell::RefCell;
-use std::path::Path;
-use std::rc::Rc;
 use std::{env, fs};
-use std::{thread, time};
 
 #[allow(non_camel_case_types)]
 #[derive(PartialEq, Debug, Eq, Hash, Clone, Ord, PartialOrd, Deserialize)]
@@ -24,20 +19,7 @@ struct look_and_feel_entry {
 
 pub fn look_and_feel_page(
     look_and_feel_content_page_stack: &gtk::Stack,
-    window: &adw::ApplicationWindow,
-    internet_connected: &Rc<RefCell<bool>>,
 ) {
-    let internet_connected_status = internet_connected.clone();
-
-    let (internet_loop_sender, internet_loop_receiver) = async_channel::unbounded();
-    let internet_loop_sender = internet_loop_sender.clone();
-    // The long running operation runs now in a separate thread
-    gio::spawn_blocking(move || loop {
-        thread::sleep(time::Duration::from_secs(1));
-        internet_loop_sender
-            .send_blocking(true)
-            .expect("The channel needs to be open.");
-    });
 
     let look_and_feel_page_box = gtk::Box::builder().vexpand(true).hexpand(true).build();
 
@@ -61,20 +43,6 @@ pub fn look_and_feel_page(
         .min_content_width(520)
         .build();
 
-    let internet_loop_context = MainContext::default();
-    // The main loop executes the asynchronous block
-    internet_loop_context.spawn_local(
-        clone!(@strong internet_connected_status, @weak look_and_feel_page_box => async move {
-            while let Ok(_state) = internet_loop_receiver.recv().await {
-                if *internet_connected_status.borrow_mut() == true {
-                    look_and_feel_page_box.set_sensitive(true);
-                } else {
-                    look_and_feel_page_box.set_sensitive(false);
-                }
-            }
-        }),
-    );
-
     let mut json_array: Vec<look_and_feel_entry> = Vec::new();
     let json_path = "/usr/share/pika-welcome/config/look_and_feel.json";
     let json_data = fs::read_to_string(json_path).expect("Unable to read json");
@@ -91,11 +59,6 @@ pub fn look_and_feel_page(
     let entry_buttons_size_group = gtk::SizeGroup::new(gtk::SizeGroupMode::Both);
 
     for look_and_feel_entry in json_array {
-        let (entry_command_status_loop_sender, entry_command_status_loop_receiver) =
-            async_channel::unbounded();
-        let entry_command_status_loop_sender: async_channel::Sender<bool> =
-            entry_command_status_loop_sender.clone();
-
         let entry_title = look_and_feel_entry.title;
         let entry_subtitle = look_and_feel_entry.subtitle;
         let entry_icon = look_and_feel_entry.icon;
@@ -124,43 +87,18 @@ pub fn look_and_feel_page(
         entry_row.add_prefix(&entry_row_icon);
         entry_row.add_suffix(&entry_row_button);
 
-        entry_row_button.connect_clicked(clone!(@strong entry_command, @weak window => move |_| {
-                gio::spawn_blocking(clone!(@strong entry_command_status_loop_sender, @strong entry_command => move || {
-                            if Path::new("/tmp/pika-welcome-exec.sh").exists() {
-                            fs::remove_file("/tmp/pika-welcome-exec.sh").expect("Bad permissions on /tmp/pika-installer-gtk4-target-manual.txt");
-                            }
-                            fs::write("/tmp/pika-welcome-exec.sh", "#! /bin/bash\nset -e\n".to_owned() + &entry_command).expect("Unable to write file");
-                            let _ = cmd!("chmod", "+x", "/tmp/pika-welcome-exec.sh").read();
-                            let command = cmd!("/tmp/pika-welcome-exec.sh").run();
-                            if command.is_err() {
-                                entry_command_status_loop_sender.send_blocking(false).expect("The channel needs to be open.");
-                            } else {
-                                entry_command_status_loop_sender.send_blocking(true).expect("The channel needs to be open.");
-                            }
-                }));
+        entry_row_button.connect_clicked(clone!(@strong entry_command => move |_| {
+            let entry_command = entry_command.clone();
+            std::thread::spawn(move || {
+                if std::path::Path::new("/tmp/pika-welcome-exec.sh").exists() {
+                    fs::remove_file("/tmp/pika-welcome-exec.sh").expect("Bad permissions on /tmp/pika-installer-gtk4-target-manual.txt");
+                }
+                fs::write("/tmp/pika-welcome-exec.sh", "#! /bin/bash\nset -e\n".to_owned() + &entry_command).expect("Unable to write file");
+                std::process::Command::new("chmod").args(["+x", "/tmp/pika-welcome-exec.sh"]).status().unwrap();
+                std::process::Command::new("/tmp/pika-welcome-exec.sh").spawn().unwrap();
+            });
         }));
 
-        let cmd_err_dialog = adw::MessageDialog::builder()
-            .body(t!("cmd_err_dialog_body"))
-            .heading(t!("cmd_err_dialog_heading"))
-            .transient_for(window)
-            .build();
-        cmd_err_dialog.add_response(
-            "cmd_err_dialog_ok",
-            &t!("cmd_err_dialog_ok_label").to_string(),
-        );
-
-        let entry_command_status_loop_context = MainContext::default();
-        // The main loop executes the asynchronous block
-        entry_command_status_loop_context.spawn_local(
-            clone!(@weak cmd_err_dialog, @strong entry_command_status_loop_receiver => async move {
-                while let Ok(state) = entry_command_status_loop_receiver.recv().await {
-                    if state == false {
-                        cmd_err_dialog.present();
-                    }
-                }
-            }),
-        );
         let current_desktop = match env::var_os("XDG_SESSION_DESKTOP") {
             Some(v) => v.into_string().unwrap(),
             None => panic!("XDG_SESSION_DESKTOP is not set"),

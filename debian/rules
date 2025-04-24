@@ -4,7 +4,16 @@
 ## Output every command that modifies files on the build system.
 export DH_VERBOSE = 1
 
-export PATH := "/root/.cargo/bin:$(PWD):$(PATH)"
+export PIKA_BUILD_ARCH = $(shell cat ../pika-build-arch)
+export PATH := $(PATH):/root/.cargo/bin
+
+override_dh_prep:
+# amd64 build prep
+ifeq (amd64-v3,$(PIKA_BUILD_ARCH))
+# Does not support LTO due to dylib-lto
+#export RUSTFLAGS = -C target-cpu=x86-64-v3 -C lto=fat -C embed-bitcode -C codegen-units=1 -C opt-level=3 -Zdylib-lto
+export RUSTFLAGS = -C target-cpu=x86-64-v3 -C opt-level=3
+endif
 
 %:
 	dh $@
@@ -21,6 +30,7 @@ override_dh_auto_install:
 	mkdir -p debian/pika-welcome/usr/share/
 	mkdir -p debian/pika-welcome/usr/lib/pika/pika-welcome/scripts/
 	cp -rvf data/scripts/*.sh debian/pika-welcome/usr/lib/pika/pika-welcome/scripts/
+	cp -rvf locales debian/pika-welcome/usr/lib/pika/pika-welcome/
 	chmod 755 debian/pika-welcome/usr/lib/pika/pika-welcome/scripts/*.sh
 	cp data/com.github.pikaos-linux.pikawelcome.gschema.xml debian/pika-welcome/usr/share/glib-2.0/schemas/
 	mkdir -p debian/pika-welcome/usr/share/applications
